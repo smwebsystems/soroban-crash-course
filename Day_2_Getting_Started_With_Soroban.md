@@ -289,23 +289,25 @@ Follow the official deployment guide:
 
 Learn how to store, update, and retrieve persistent data on-chain.
 
-In Section 1, our contract was stateless.
-Now we introduce state.
+In Section 1, our contract was **stateless**.
+
+Now we introduce **state**, meaning the contract can **remember information between transactions**.
 
 ---
 
 ## Why State Matters
 
-Real-world contracts must remember things:
+Real-world smart contracts must remember data such as:
 
-* Token balances
-* Voting records
-* Escrow agreements
-* Counters
+- Token balances  
+- Voting records  
+- Escrow agreements  
+- Application statistics  
+- Counters  
 
-State is stored on-chain.
+Without state, a contract cannot track history.
 
-In Soroban, this is accessed through the `Env` object.
+State is stored **on-chain** and accessed through Soroban's **Env object**.
 
 ---
 
@@ -313,22 +315,25 @@ In Soroban, this is accessed through the `Env` object.
 
 ```rust
 #![no_std]
-use soroban_sdk::{contract, contractimpl, Env};
+use soroban_sdk::{contract, contractimpl, log, symbol_short, Env, Symbol};
+
+const COUNTER: Symbol = symbol_short!("COUNTER");
 
 #[contract]
-pub struct CounterContract;
+pub struct IncrementContract;
 
 #[contractimpl]
-impl CounterContract {
+impl IncrementContract {
+    /// Increment increments an internal counter, and returns the value.
     pub fn increment(env: Env) -> u32 {
-        let mut count: u32 = env.storage().persistent().get(&"count").unwrap_or(0);
-        count += 1;
-        env.storage().persistent().set(&"count", &count);
-        count
-    }
+        let mut count: u32 = env.storage().instance().get(&COUNTER).unwrap_or(0);
+        log!(&env, "count: {}", count);
 
-    pub fn get(env: Env) -> u32 {
-        env.storage().persistent().get(&"count").unwrap_or(0)
+        count += 1;
+        env.storage().instance().set(&COUNTER, &count);
+        env.storage().instance().extend_ttl(50, 100);
+
+        count
     }
 }
 
@@ -337,69 +342,147 @@ mod test;
 
 ---
 
-## Understanding Persistent Storage
+## Understanding Storage in Soroban
+
+This contract stores its counter using:
 
 ```rust
-env.storage().persistent()
+env.storage().instance()
 ```
 
-Soroban provides multiple storage types. Persistent storage:
+Soroban provides **three storage types**:
 
-* Lives across transactions
-* Is saved on-chain
-* Can be read and updated
+| Storage Type | Purpose |
+|---------------|--------|
+| Instance | Data tied to the contract instance |
+| Persistent | Long-term ledger storage |
+| Temporary | Short-lived storage |
 
----
-
-## How `increment` Works
-
-1. Retrieve current value using key `"count"`
-2. If no value exists, default to `0`
-3. Increase by 1
-4. Save updated value
-5. Return new value
-
-This demonstrates full read-modify-write logic.
+In this contract we use **instance storage**, which is efficient for storing **contract-specific data like counters or configuration values**.
 
 ---
 
-## The `get` Function
-
-Simply retrieves stored value.
-
-If no value exists, returns `0`.
-
----
-
-# Testing the Counter Contract
+## The Storage Key
 
 ```rust
-#![cfg(test)]
-
-use super::*;
-use soroban_sdk::Env;
-
-#[test]
-fn test_counter() {
-    let env = Env::default();
-    let contract_id = env.register(CounterContract, ());
-    let client = CounterContractClient::new(&env, &contract_id);
-
-    assert_eq!(client.get(), 0);
-    assert_eq!(client.increment(), 1);
-    assert_eq!(client.increment(), 2);
-    assert_eq!(client.get(), 2);
-}
+const COUNTER: Symbol = symbol_short!("COUNTER");
 ```
+
+This defines the **storage key** used to store the counter value.
+
+A **Symbol** is a lightweight identifier used as a key.
+
+Example:
+
+```
+Key: "COUNTER"
+Value: 5
+```
+
+Symbols are efficient because they are optimized for blockchain storage.
 
 ---
 
-## What This Test Proves
+## How `increment()` Works
 
-* Initial state defaults to 0
-* State updates persist between calls
-* Storage behaves deterministically
+The function follows a **read → modify → write** pattern.
 
+### Step 1 — Read Current Value
+
+```rust
+let mut count: u32 = env.storage().instance().get(&COUNTER).unwrap_or(0);
+```
+
+The contract retrieves the stored value.
+
+If it does not exist, it defaults to **0**.
+
+---
+
+### Step 2 — Log the Current Value
+
+```rust
+log!(&env, "count: {}", count);
+```
+
+This prints the current counter value to the **contract logs**.
+
+Logs help developers **debug and monitor contract behavior**.
+
+---
+
+### Step 3 — Increment the Counter
+
+```rust
+count += 1;
+```
+
+The counter value is increased by one.
+
+---
+
+### Step 4 — Store the Updated Value
+
+```rust
+env.storage().instance().set(&COUNTER, &count);
+```
+
+The updated value is written back to storage.
+
+---
+
+### Step 5 — Extend Storage Lifetime
+
+```rust
+env.storage().instance().extend_ttl(50, 100);
+```
+
+Soroban storage has a **time-to-live (TTL)**.
+
+This instruction ensures the storage remains active.
+
+Meaning:
+
+- If TTL drops below **50 ledgers**, extend it  
+- Set the new TTL to **100 ledgers**
+
+This prevents the storage from expiring.
+
+---
+
+## Why TTL Exists
+
+Soroban uses TTL to prevent **unused storage from bloating the ledger**.
+
+If a contract stops being used, its storage can eventually expire.
+
+Contracts must periodically **extend TTL** if they want data to persist.
+
+---
+
+## What This Contract Demonstrates
+
+This contract introduces several important Soroban concepts:
+
+- Instance storage  
+- Storage keys using Symbols  
+- Logging with `log!`  
+- Storage TTL management  
+- Read-modify-write logic  
+
+These are **core building blocks for almost every Soroban smart contract**.
+
+---
+
+## Key Takeaways
+
+After completing this section, you should understand:
+
+- How to store data inside a Soroban smart contract  
+- How to retrieve stored data  
+- How to update state on-chain  
+- How contract logs work  
+- Why storage TTL management is important
 ---
 
 # Key Concepts Learned in This Session
