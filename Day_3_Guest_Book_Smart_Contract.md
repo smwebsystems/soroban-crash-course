@@ -1,63 +1,69 @@
-# Guest Book Smart Contract
+# Guest Book Smart Contract Tutorial
+
+---
 
 ## Overview
 
-This tutorial introduces a Guest Book smart contract built using Soroban on the Stellar network.
+This tutorial introduces a **Guest Book smart contract** built using Soroban on the Stellar network.
 
-It is designed as the first step after a basic "Hello World" contract. The focus is on understanding authentication, structured data storage, and working with addresses.
+It is designed as the first step after a basic "Hello World" contract, focusing on:
+- Authentication
+- Structured data storage
+- Working with addresses
 
-By completing this tutorial, participants will learn how to:
+### What You'll Build
 
-- Require transaction authorization using `require_auth()`
-- Define and store custom data structures
-- Work with `Address` types
-- Persist structured data in contract storage
-- Write and run Soroban tests
-
-This contract builds the foundation required for more advanced contracts such as Task Managers and Escrow systems.
+A contract that allows users to:
+- Post messages on-chain
+- Associate messages with their address
+- Retrieve messages by ID
+- View total message count
 
 ---
 
 ## Learning Objectives
 
-After this tutorial, students should be able to:
+After completing this tutorial, you will be able to:
 
 1. Understand how authentication works in Soroban
 2. Create custom structs using `#[contracttype]`
-3. Store and retrieve structured data from storage
-4. Use `Address` to represent users
-5. Implement and test contract functionality
+3. Use typed storage keys with enums
+4. Store and retrieve structured data from storage
+5. Use `Address` to represent users
+6. Implement and test contract functionality
 
 ---
 
 ## Contract Design
 
-The Guest Book contract allows users to:
-
-- Post a message
-- Associate the message with their address
-- Store messages on-chain
-- Retrieve messages by ID
-- View total message count
-
-Each message is stored with an incrementing numeric ID.
+Each message is stored with an **incrementing numeric ID**, following Soroban best practices by using a typed `DataKey` enum instead of raw string keys.
+```
+Message 1 -> DataKey::Message(1) -> { author, text }
+Message 2 -> DataKey::Message(2) -> { author, text }
+...
+Total Count -> DataKey::Count -> u32
+```
 
 ---
 
-## Full Working Contract Code (Includes Tests)
-
+## Full Contract Code
 ```rust
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, log};
+use soroban_sdk::{contract, contractimpl, contracttype, log, Address, Env, String};
 
-/// A guest book contract to learn:
-/// - Authentication (require_auth)
-/// - Custom data structures
-/// - Working with addresses
-/// - Storing structured data
-
+/// Structured storage keys for the contract.
+/// This is better than using raw strings like "COUNT"
+/// because it is type-safe and avoids typo-related bugs.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    Count,
+    Message(u32),
+}
+
+/// A guest book message
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Message {
     pub author: Address,
     pub text: String,
@@ -68,39 +74,44 @@ pub struct GuestBook;
 
 #[contractimpl]
 impl GuestBook {
-    /// Post a message to the guest book
-    /// The author must authorize this action
+    /// Post a message to the guest book.
+    /// The author must authorize this action.
     pub fn post_message(env: Env, author: Address, text: String) {
-        // Require authentication from the author
         author.require_auth();
+
+        // Read current count from storage, defaulting to 0 if not set
+        let mut count: u32 = env.storage().instance().get(&DataKey::Count).unwrap_or(0);
+
+        // Increment count to create the next message ID
+        count += 1;
 
         let message = Message {
             author: author.clone(),
-            text: text.clone(),
+            text,
         };
 
-        // Get current message count
-        let mut count: u32 = env.storage().instance().get(&"COUNT").unwrap_or(0);
-        count += 1;
+        // Store the message under a typed key
+        env.storage()
+            .instance()
+            .set(&DataKey::Message(count), &message);
 
-        // Store the message with its index
-        env.storage().instance().set(&count, &message);
-        env.storage().instance().set(&"COUNT", &count);
+        // Update the message count
+        env.storage().instance().set(&DataKey::Count, &count);
 
-        log!(&env, "Message posted by: {}", author);
+        log!(&env, "Message {} posted by: {}", count, author);
     }
 
-    /// Get a specific message by its number
+    /// Get a specific message by its ID
     pub fn get_message(env: Env, message_id: u32) -> Message {
         env.storage()
             .instance()
-            .get(&message_id)
-            .expect("Message not found")
+            .get(&DataKey::Message(message_id))
+            .unwrap_or_else(|| panic!("Message not found"))
     }
 
     /// Get the total number of messages
     pub fn get_message_count(env: Env) -> u32 {
-        env.storage().instance().get(&"COUNT").unwrap_or(0)
+        env.storage().instance().get(&DataKey::Count).unwrap_or(0)
     }
 }
 
@@ -112,7 +123,7 @@ mod test {
     #[test]
     fn test_post_and_get_message() {
         let env = Env::default();
-        env.mock_all_auths(); // Mock auth for testing
+        env.mock_all_auths();
 
         let contract_id = env.register(GuestBook, ());
         let client = GuestBookClient::new(&env, &contract_id);
@@ -120,15 +131,12 @@ mod test {
         let user = Address::generate(&env);
         let message_text = String::from_str(&env, "Hello, Soroban!");
 
-        // Post a message
         client.post_message(&user, &message_text);
 
-        // Verify the message
         let msg = client.get_message(&1);
         assert_eq!(msg.author, user);
         assert_eq!(msg.text, message_text);
 
-        // Check count
         let count = client.get_message_count();
         assert_eq!(count, 1);
     }
@@ -144,22 +152,28 @@ mod test {
         let user1 = Address::generate(&env);
         let user2 = Address::generate(&env);
 
-        client.post_message(&user1, &String::from_str(&env, "First!"));
-        client.post_message(&user2, &String::from_str(&env, "Second!"));
+        let first = String::from_str(&env, "First!");
+        let second = String::from_str(&env, "Second!");
+
+        client.post_message(&user1, &first);
+        client.post_message(&user2, &second);
 
         assert_eq!(client.get_message_count(), 2);
 
         let msg1 = client.get_message(&1);
         assert_eq!(msg1.author, user1);
+        assert_eq!(msg1.text, first);
 
         let msg2 = client.get_message(&2);
         assert_eq!(msg2.author, user2);
+        assert_eq!(msg2.text, second);
     }
 
     #[test]
     #[should_panic(expected = "Message not found")]
     fn test_get_nonexistent_message() {
         let env = Env::default();
+
         let contract_id = env.register(GuestBook, ());
         let client = GuestBookClient::new(&env, &contract_id);
 
@@ -170,18 +184,45 @@ mod test {
 
 ---
 
-## Core Concepts Explained
+## Core Concepts
 
-### 1. `#![no_std]`
+### 1. `#![no_std]` - No Standard Library
 
-- Soroban contracts are compiled to WebAssembly (WASM) and do not use Rust's standard library.
-- This is required for on-chain execution.
+Soroban contracts are compiled to **WebAssembly (WASM)** and do not use Rust's standard library.
 
-### 2. Custom Data Structures (`#[contracttype]`)
+> **Note:** This is required for on-chain execution, where contracts run in a restricted environment.
 
+---
+
+### 2. Typed Storage Keys with `DataKey`
 ```rust
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    Count,
+    Message(u32),
+}
+```
+
+#### Why This Is Better
+
+| Raw Strings | Typed Enum |
+|-------------|------------|
+| `"COUNT"` prone to typos | Type-safe |
+| No compile-time checks | Catches errors early |
+| Hard to understand | Self-documenting |
+
+**Storage Structure:**
+- `DataKey::Count` -> Total number of messages
+- `DataKey::Message(1)` -> First message
+- `DataKey::Message(2)` -> Second message
+
+---
+
+### 3. Custom Data Structures with `#[contracttype]`
+```rust
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Message {
     pub author: Address,
     pub text: String,
@@ -190,149 +231,201 @@ pub struct Message {
 
 The `Message` struct represents structured data stored on-chain.
 
-The `#[contracttype]` attribute makes the struct serializable so it can be stored in contract storage.
+**Derived Traits:**
+- `Clone` -> Allows copying values when needed
+- `Debug` -> Helps with inspection and debugging
+- `Eq` + `PartialEq` -> Allow equality checks in tests
 
-Each message contains:
-- The author's address
-- The message text
+---
 
-### 3. Authentication with `require_auth()`
-
+### 4. Authentication with `require_auth()`
 ```rust
 author.require_auth();
 ```
 
-This ensures that:
-- The caller signed the transaction
-- No one can post a message pretending to be someone else
+#### Security Benefits
 
-Without authentication, any address could be impersonated.
+- Ensures the author actually approved the transaction
+- Prevents impersonation attacks
+- No one can post messages pretending to be another address
 
-**Authentication is one of the most important security concepts in smart contract development.**
+> **Important:** This is one of the most important security checks in smart contract development.
 
-### 4. Persistent Storage + Message Indexing
+---
 
-Soroban provides contract storage using:
-
+### 5. Instance Storage
 ```rust
 env.storage().instance()
 ```
 
-We use storage to:
-- Keep track of message count (`"COUNT"`)
-- Store each message using its numeric ID (1, 2, 3, ...)
+Soroban provides contract storage for:
+- Total message count
+- Individual messages under typed keys
 
-**How posting works:**
+Instance storage is ideal for contract-specific state like counters and records.
 
-1. Read `"COUNT"` from storage (defaults to 0)
-2. Add 1 to get the next message ID
-3. Store the message under that ID
-4. Update `"COUNT"`
+---
 
-This gives every message a predictable ID.
+### 6. Message Indexing Flow
+```mermaid
+graph LR
+    A[Read Count] --> B[Increment]
+    B --> C[Create Message]
+    C --> D[Store Message]
+    D --> E[Update Count]
+```
 
-### 5. Retrieving Data
+**Step-by-step:**
+1. Read the current message count
+2. Increment it to create the next message ID
+3. Build a `Message` struct
+4. Store the message under `DataKey::Message(count)`
+5. Store the new count under `DataKey::Count`
 
+---
+
+### 7. Retrieving Data
 ```rust
 pub fn get_message(env: Env, message_id: u32) -> Message
 ```
 
-This function retrieves a stored message by ID.
-
-If the message does not exist, the contract panics with:
+Retrieves a stored message by ID. If the message doesn't exist:
 ```
-Message not found
+panic!("Message not found")
 ```
 
-This ensures invalid reads are handled explicitly.
+This makes missing data explicit and easy to detect during testing.
 
 ---
 
-## Testing the Contract
+### 8. Logging
+```rust
+log!(&env, "Message {} posted by: {}", count, author);
+```
 
-Soroban provides a powerful local testing environment.
+**Use cases:**
+- Debugging contract behavior
+- Tracing execution
+- Observing values (message ID, author, etc.)
+
+---
+
+## Testing
+
+Soroban provides a **local testing environment** to verify contract behavior before deployment.
 
 ### Key Testing Setup
-
 ```rust
 let env = Env::default();
 env.mock_all_auths();
 ```
 
-- `Env::default()` creates a simulated blockchain environment (local test instance).
-- `mock_all_auths()` simulates required signatures so `require_auth()` won't fail in tests.
+- `Env::default()` -> Creates a simulated blockchain environment
+- `mock_all_auths()` -> Simulates authorization (bypasses `require_auth()` checks)
 
-### Generating Users
-
+### Generating Test Addresses
 ```rust
 let user = Address::generate(&env);
 ```
 
-This creates a new test address (like a user account) inside the test environment.
-
-### Test Scenarios Included
-
-This working version includes three test scenarios:
-
-#### 1. Posting and retrieving a message
-- Post one message
-- Retrieve it by ID 1
-- Verify author + text
-- Verify message count is 1
-
-#### 2. Posting multiple messages
-- Post from user1 and user2
-- Check message count is 2
-- Verify message 1 belongs to user1
-- Verify message 2 belongs to user2
-
-#### 3. Retrieving a non-existent message
-- Calls `get_message(999)`
-- Test expects a panic with "Message not found"
+Creates a test address that acts like a user account.
 
 ---
 
-## How This Prepares Students for More Advanced Contracts
+### Test Scenarios
 
-This Guest Book contract introduces:
+#### Test 1: Posting and Retrieving a Message
 
-- Authentication (`require_auth`)
-- Structured storage (`#[contracttype]` + structs)
-- Persistent counters (`"COUNT"`)
-- Data retrieval patterns
-- Proper local testing workflow (including mocked auth)
+Verifies:
+- User can post a message
+- Message is stored correctly
+- Message can be retrieved by ID
+- Total count becomes 1
 
-The next tutorial (Task Manager) builds on this by introducing:
+#### Test 2: Multiple Messages
 
-- Enums for state management
-- Ownership checks
-- Controlled state transitions
+Verifies:
+- Multiple users can post messages
+- Message count increases correctly
+- Each message is stored under the correct ID
+- Retrieved messages match author and text
 
-From there, students can move into building an Escrow contract, which combines:
+#### Test 3: Non-Existent Message
 
-- Multiple roles
-- Token transfers
-- Strict state transition rules
+Verifies:
+- Requesting a missing message causes a panic
+- Error message is correct: `"Message not found"`
+
+---
+
+## Best Practices
+
+### Why This Version Is Better
+
+| Aspect | Basic Version | This Version |
+|--------|---------------|--------------|
+| Storage Keys | Raw strings `"COUNT"` | Typed enum `DataKey::Count` |
+| Type Safety | Runtime errors | Compile-time checks |
+| Maintainability | Prone to typos | Self-documenting |
+| Scalability | Harder to extend | Easy to add new keys |
+
+### How This Prepares You for Advanced Contracts
+
+This Guest Book introduces:
+- Authentication with `require_auth`
+- Structured storage with `#[contracttype]`
+- Typed storage keys using enums
+- Persistent counters
+- Message retrieval patterns
+- Local contract testing
 
 ---
 
 ## Assignment
 
-Extend this contract by:
+Extend this contract by adding:
 
-1. Adding a timestamp field
-2. Adding a function to delete a message (only by its author)
-3. Preventing empty messages
+### Task 1: Timestamps
+Add a `timestamp` field to each message
 
-This will deepen understanding of authorization and state control.
+### Task 2: Delete Messages
+Add a function to delete a message (only by its author)
+
+### Task 3: Validation
+Prevent empty messages from being posted
+
+**Hint:** These extensions will deepen your understanding of authorization, validation, and state control.
 
 ---
 
-## Next Step
+## Next Steps
 
-After completing this tutorial, proceed to the **Task Manager** contract to learn:
+### Task Manager Contract
 
-- Enums
-- State transitions
-- Ownership validation
+After completing this tutorial, proceed to learn:
+- Enums for task state
+- Ownership checks
+- Controlled state transitions
 - Controlled updates
+
+### Escrow Contract (Advanced)
+
+Eventually build an Escrow contract that combines:
+- Multiple roles
+- Token transfers
+- Stricter state management
+- Advanced authorization rules
+
+---
+
+## Resources
+
+- [Soroban Documentation](https://soroban.stellar.org/)
+- [Stellar Developer Discord](https://discord.gg/stellar)
+- [Rust Programming Language](https://www.rust-lang.org/)
+
+
+
+---
+
+**Happy Building!**
